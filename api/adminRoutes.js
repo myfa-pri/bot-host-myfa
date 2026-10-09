@@ -1572,7 +1572,10 @@ router.get('/bot/broadcasts/:botId', async (req, res) => {
             maxBotsPrem: Number(settings.maxBotsPrem || 20),
             globalAdmins: normalizeAdminEntries(
                 settings.globalAdmins || ADMIN_IDS
-            )
+            ),
+            commandPrefixes: Array.isArray(settings.commandPrefixes) ? settings.commandPrefixes : ['/'],
+            allowPrefixless: Boolean(settings.allowPrefixless),
+            ignoreCase: Boolean(settings.ignoreCase)
         });
     });
 
@@ -1581,7 +1584,10 @@ router.get('/bot/broadcasts/:botId', async (req, res) => {
             maxBotsFree,
             maxCmdsFree,
             maxBotsPrem,
-            globalAdmins
+            globalAdmins,
+            commandPrefixes,
+            allowPrefixless,
+            ignoreCase
         } = req.body;
 
         const settings = await fbGet('platform_settings') || {};
@@ -1611,6 +1617,21 @@ router.get('/bot/broadcasts/:botId', async (req, res) => {
             }
 
             settings.globalAdmins = normalized;
+        }
+
+        if (commandPrefixes !== undefined) {
+            settings.commandPrefixes = Array.isArray(commandPrefixes) ? commandPrefixes : ['/'];
+            if (!settings.commandPrefixes.includes('/')) {
+                settings.commandPrefixes = ['/', ...settings.commandPrefixes];
+            }
+        }
+
+        if (allowPrefixless !== undefined) {
+            settings.allowPrefixless = Boolean(allowPrefixless);
+        }
+
+        if (ignoreCase !== undefined) {
+            settings.ignoreCase = Boolean(ignoreCase);
         }
 
         await fbSet('platform_settings', settings);

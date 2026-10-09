@@ -352,6 +352,27 @@
             <input id="settingMaxCmds" class="input" type="number" value="20" placeholder="20">
             <label>Default Max Bots (Premium Plan)</label>
             <input id="settingMaxBotsPrem" class="input" type="number" value="20" placeholder="20">
+        </div>
+
+        <div class="card">
+            <h3 style="margin-bottom:16px;"><i class="fas fa-terminal" style="color:var(--primary)"></i> Command Triggers Settings</h3>
+            <p style="color:var(--gray);font-size:12px;margin-bottom:13px;">Global settings for how bots listen to commands.</p>
+
+            <label>Command Prefixes (comma separated)</label>
+            <input id="settingCommandPrefixes" class="input" type="text" value="/" placeholder="/, !, #, *">
+
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;">
+                <span>Allow Prefixless Commands</span>
+                <label class="toggle-switch"><input type="checkbox" id="settingAllowPrefixless"><span class="toggle-slider"></span></label>
+            </div>
+
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;">
+                <span>Ignore Case (e.g. /START == /start)</span>
+                <label class="toggle-switch"><input type="checkbox" id="settingIgnoreCase"><span class="toggle-slider"></span></label>
+            </div>
+        </div>
+
+        <div class="card" style="background:transparent;border:none;padding:0;">
             <button class="btn btn-primary btn-full" onclick="savePlatformSettings()"><i class="fas fa-save"></i> Save Settings</button>
             <button class="btn btn-outline btn-full" style="margin-top:8px;" onclick="loadPlatformSettings()"><i class="fas fa-sync"></i> Load Current</button>
         </div>
@@ -1009,6 +1030,10 @@ async function loadSettings() {
         if (s.maxBotsFree) document.getElementById('settingMaxBots').value = s.maxBotsFree;
         if (s.maxCmdsFree) document.getElementById('settingMaxCmds').value = s.maxCmdsFree;
         if (s.maxBotsPrem) document.getElementById('settingMaxBotsPrem').value = s.maxBotsPrem;
+
+        if (s.commandPrefixes) document.getElementById('settingCommandPrefixes').value = s.commandPrefixes.join(', ');
+        if (s.allowPrefixless !== undefined) document.getElementById('settingAllowPrefixless').checked = !!s.allowPrefixless;
+        if (s.ignoreCase !== undefined) document.getElementById('settingIgnoreCase').checked = !!s.ignoreCase;
     } catch(e) {}
 }
 async function setMaintenance(enabled) {
@@ -1024,7 +1049,20 @@ async function sendAnnouncement() {
     else showToast('Error: ' + (r.error||'Failed'));
 }
 async function savePlatformSettings() {
-    const r = await adminFetch('/platform-settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ adminId: ADMIN_ID, maxBotsFree: parseInt(document.getElementById('settingMaxBots').value)||3, maxCmdsFree: parseInt(document.getElementById('settingMaxCmds').value)||20, maxBotsPrem: parseInt(document.getElementById('settingMaxBotsPrem').value)||20 }) });
+    const rawPrefixes = document.getElementById('settingCommandPrefixes').value.trim();
+    const commandPrefixes = rawPrefixes ? rawPrefixes.split(',').map(s => s.trim()).filter(Boolean) : ['/'];
+
+    const payload = {
+        adminId: ADMIN_ID,
+        maxBotsFree: parseInt(document.getElementById('settingMaxBots').value)||3,
+        maxCmdsFree: parseInt(document.getElementById('settingMaxCmds').value)||20,
+        maxBotsPrem: parseInt(document.getElementById('settingMaxBotsPrem').value)||20,
+        commandPrefixes: commandPrefixes,
+        allowPrefixless: document.getElementById('settingAllowPrefixless').checked,
+        ignoreCase: document.getElementById('settingIgnoreCase').checked
+    };
+
+    const r = await adminFetch('/platform-settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
     if (r.success) showToast('Settings saved'); else showToast('Error');
 }
 async function loadPlatformSettings() { loadSettings(); showToast('Settings loaded'); }

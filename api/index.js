@@ -270,6 +270,16 @@ app.post('/api/webhook/:botId', async (req, res) => {
         const bot = new Telegraf(dep.token);
         const commands = await fbGet(`bot_${botId}_commands`) || {};
         const envVars = await fbGet(`bot_${botId}_env`) || {};
+        const botSettings = await fbGet(`bot_${botId}_settings`) || {};
+        const platformSettings = await fbGet('platform_settings') || {};
+
+        let commandPrefixes = Array.isArray(botSettings.commandPrefixes) ? botSettings.commandPrefixes : (Array.isArray(platformSettings.commandPrefixes) ? platformSettings.commandPrefixes : ['/']);
+        if (!commandPrefixes.includes('/')) {
+            commandPrefixes = ['/', ...commandPrefixes];
+        }
+
+        const allowPrefixless = botSettings.allowPrefixless !== undefined ? botSettings.allowPrefixless : (platformSettings.allowPrefixless !== undefined ? platformSettings.allowPrefixless : false);
+        const ignoreCase = botSettings.ignoreCase !== undefined ? botSettings.ignoreCase : (platformSettings.ignoreCase !== undefined ? platformSettings.ignoreCase : false);
 
         // Track message analytics
         if (req.body.message) {
@@ -295,13 +305,34 @@ app.post('/api/webhook/:botId', async (req, res) => {
             let matchedCmdData = null;
             let matchedCmdName = '';
 
+            const matchText = ignoreCase ? text.toLowerCase() : text;
+
+            let allMatchers = [];
             for (const cmdData of Object.values(commands)) {
                 const commandName = (typeof cmdData === 'object') ? cmdData.command : "cmd";
                 const aliases = (typeof cmdData === 'object' && cmdData.aliases) ? cmdData.aliases.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-                const matchers = [commandName, `/${commandName}`, ...aliases, ...aliases.map(a => `/${a}`)];
+                let baseMatchers = [commandName, ...aliases];
 
-                if (matchers.some(m => text === m || text.startsWith(m + ' '))) {
+                let currentMatchers = [];
+                for (const base of baseMatchers) {
+                    if (allowPrefixless) {
+                        currentMatchers.push(ignoreCase ? base.toLowerCase() : base);
+                    }
+                    for (const prefix of commandPrefixes) {
+                        currentMatchers.push(ignoreCase ? (prefix + base).toLowerCase() : (prefix + base));
+                    }
+                }
+
+                for (const m of currentMatchers) {
+                    allMatchers.push({ matcher: m, cmdData, commandName });
+                }
+            }
+
+            allMatchers.sort((a, b) => b.matcher.length - a.matcher.length);
+
+            for (const { matcher, cmdData, commandName } of allMatchers) {
+                if (matchText === matcher || matchText.startsWith(matcher + ' ')) {
                     matchedCmdData = cmdData;
                     matchedCmdName = commandName;
                     break;
@@ -698,6 +729,70 @@ app.post('/api/save-env', async (req, res) => {
     env[key] = value;
     await fbSet(`bot_${botId}_env`, env);
     res.json({ success: true });
+});
+
+// Bot Settings
+app.get('/api/bot-settings', async (req, res) => {
+    res.json(await fbGet(`bot_${req.query.botId}_settings`) || {});
+});
+
+app.post('/api/save-bot-settings', async (req, res) => {
+    const { botId, settings } = req.body;
+    await fbSet(`bot_${botId}_settings`, settings);
+    res.json({ success: true });
+});
+
+app.post('/api/test-command', async (req, res) => {
+    const { botId, text } = req.body;
+    const commands = await fbGet(`bot_${botId}_commands`) || {};
+    const botSettings = await fbGet(`bot_${botId}_settings`) || {};
+    const platformSettings = await fbGet('platform_settings') || {};
+
+    let commandPrefixes = Array.isArray(botSettings.commandPrefixes) ? botSettings.commandPrefixes : (Array.isArray(platformSettings.commandPrefixes) ? platformSettings.commandPrefixes : ['/']);
+    if (!commandPrefixes.includes('/')) {
+        commandPrefixes = ['/', ...commandPrefixes];
+    }
+
+    const allowPrefixless = botSettings.allowPrefixless !== undefined ? botSettings.allowPrefixless : (platformSettings.allowPrefixless !== undefined ? platformSettings.allowPrefixless : false);
+    const ignoreCase = botSettings.ignoreCase !== undefined ? botSettings.ignoreCase : (platformSettings.ignoreCase !== undefined ? platformSettings.ignoreCase : false);
+
+    const matchText = ignoreCase ? (text || '').toLowerCase() : (text || '');
+
+    let allMatchers = [];
+    for (const cmdData of Object.values(commands)) {
+        const commandName = (typeof cmdData === 'object') ? cmdData.command : "cmd";
+        const aliases = (typeof cmdData === 'object' && cmdData.aliases) ? cmdData.aliases.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+        let baseMatchers = [commandName, ...aliases];
+
+        let currentMatchers = [];
+        for (const base of baseMatchers) {
+            if (allowPrefixless) {
+                currentMatchers.push(ignoreCase ? base.toLowerCase() : base);
+            }
+            for (const prefix of commandPrefixes) {
+                currentMatchers.push(ignoreCase ? (prefix + base).toLowerCase() : (prefix + base));
+            }
+        }
+
+        for (const m of currentMatchers) {
+            allMatchers.push({ matcher: m, cmdData, commandName });
+        }
+    }
+
+    allMatchers.sort((a, b) => b.matcher.length - a.matcher.length);
+
+    let matchedCmdName = null;
+    let matchedPrefix = null;
+    for (const { matcher, cmdData, commandName } of allMatchers) {
+        if (matchText === matcher || matchText.startsWith(matcher + ' ')) {
+            matchedCmdName = commandName;
+            matchedPrefix = matcher;
+            break;
+        }
+    }
+
+    res.json({ success: true, matchedCommand: matchedCmdName, matchedPrefix });
 });
 
 app.post('/api/delete-env', async (req, res) => {

@@ -891,6 +891,38 @@ ctx.reply(<span style="color:#f59e0b;">'Admin confirmed, proceeding…'</span>);
             </div>
             <p style="font-size:12px;color:var(--text-gray);margin:0 0 12px;">Access in commands via <code style="color:var(--primary)">env.KEY</code></p>
             <div id="envList"></div>
+
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;margin-top:20px;">
+                <div style="flex:1;height:1px;background:var(--border);"></div>
+                <span style="font-size:11px;color:var(--text-gray);font-weight:600;white-space:nowrap;">COMMAND TRIGGERS SETTINGS</span>
+                <div style="flex:1;height:1px;background:var(--border);"></div>
+            </div>
+            <div class="card" style="padding:14px;margin-bottom:16px;">
+                <p style="color:var(--text-gray);font-size:12px;margin:0 0 12px;">Override global settings. Leaving prefixes empty uses global default.</p>
+                <label>Command Prefixes (comma separated)</label>
+                <input id="botSettingPrefixes" class="input-box" placeholder="Global default">
+
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                    <label style="margin:0;">Allow Prefixless</label>
+                    <input type="checkbox" id="botSettingPrefixless" style="accent-color:var(--primary);width:16px;height:16px;">
+                </div>
+
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;">
+                    <label style="margin:0;">Ignore Case</label>
+                    <input type="checkbox" id="botSettingIgnoreCase" style="accent-color:var(--primary);width:16px;height:16px;">
+                </div>
+
+                <button class="btn btn-primary btn-sm btn-full" onclick="saveBotSettings()"><i class="fas fa-save"></i> Save Trigger Settings</button>
+            </div>
+
+            <div class="card" style="padding:14px;margin-bottom:16px;background:rgba(0,242,234,.05);border-color:rgba(0,242,234,.2);">
+                <h4 style="margin:0 0 10px;font-size:13px;color:var(--primary);"><i class="fas fa-flask"></i> Test Command Trigger</h4>
+                <div style="display:flex;gap:8px;">
+                    <input id="testCmdInput" class="input-box" style="margin:0;flex:1;padding:8px 12px;font-size:13px;" placeholder="Send a message...">
+                    <button class="btn btn-primary btn-sm" onclick="testBotCommand()">Test</button>
+                </div>
+                <div id="testCmdResult" style="margin-top:10px;font-size:12px;color:var(--text-gray);min-height:16px;"></div>
+            </div>
         </div>
         <div id="d-analytics" class="dash-tab">
             <h3 style="margin:0 0 16px;"><i class="fas fa-chart-bar" style="margin-right:6px;"></i> Stats &amp; Logs</h3>
@@ -1816,7 +1848,7 @@ function switchDash(tab, btn) {
     document.querySelectorAll('.d-nav-item').forEach(i => i.classList.remove('active'));
     if (btn) btn.classList.add('active');
     if (tab === 'commands') loadCommands();
-    if (tab === 'env') loadEnvVars();
+    if (tab === 'env') { loadEnvVars(); loadBotSettings(); }
     if (tab === 'analytics') { loadAnalytics(); loadLogs(); }
     if (tab === 'logs') { switchDash('analytics', document.querySelector('.d-nav-item:nth-child(4)')); return; }
 }
@@ -2061,6 +2093,57 @@ async function deleteEnvVar(key) {
     if (!confirm('Delete ' + key + '?')) return;
     await fetch('/api/delete-env', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ botId: currentBot.id, key }) });
     loadEnvVars();
+}
+
+async function loadBotSettings() {
+    if (!currentBot) return;
+    try {
+        const settings = await fetch('/api/bot-settings?botId=' + currentBot.id).then(r=>r.json());
+        document.getElementById('botSettingPrefixes').value = Array.isArray(settings.commandPrefixes) ? settings.commandPrefixes.join(', ') : '';
+        document.getElementById('botSettingPrefixless').checked = !!settings.allowPrefixless;
+        document.getElementById('botSettingIgnoreCase').checked = !!settings.ignoreCase;
+    } catch(e) {}
+}
+
+async function saveBotSettings() {
+    if (!currentBot) return;
+    const rawPrefixes = document.getElementById('botSettingPrefixes').value.trim();
+    const commandPrefixes = rawPrefixes ? rawPrefixes.split(',').map(s => s.trim()).filter(Boolean) : null;
+
+    const settings = {
+        commandPrefixes,
+        allowPrefixless: document.getElementById('botSettingPrefixless').checked,
+        ignoreCase: document.getElementById('botSettingIgnoreCase').checked
+    };
+
+    try {
+        const r = await fetch('/api/save-bot-settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ botId: currentBot.id, settings }) }).then(r=>r.json());
+        if (r.success) showToast('Trigger settings saved!');
+        else showToast('Error saving settings');
+    } catch(e) { showToast('Network error'); }
+}
+
+async function testBotCommand() {
+    if (!currentBot) return;
+    const text = document.getElementById('testCmdInput').value;
+    const resEl = document.getElementById('testCmdResult');
+    if (!text) { resEl.innerHTML = '<span style="color:var(--secondary)">Please enter text</span>'; return; }
+
+    resEl.innerHTML = '<span style="color:var(--text-gray)">Testing...</span>';
+    try {
+        const r = await fetch('/api/test-command', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ botId: currentBot.id, text }) }).then(r=>r.json());
+        if (r.success) {
+            if (r.matchedCommand) {
+                resEl.innerHTML = `<span style="color:var(--success)"><i class="fas fa-check-circle"></i> Matched command: <strong>${r.matchedCommand}</strong> (Prefix: ${r.matchedPrefix})</span>`;
+            } else {
+                resEl.innerHTML = `<span style="color:var(--secondary)"><i class="fas fa-times-circle"></i> No command matched</span>`;
+            }
+        } else {
+            resEl.innerHTML = `<span style="color:var(--secondary)">Error running test</span>`;
+        }
+    } catch(e) {
+        resEl.innerHTML = `<span style="color:var(--secondary)">Network error</span>`;
+    }
 }
 
 async function loadAnalytics() {
