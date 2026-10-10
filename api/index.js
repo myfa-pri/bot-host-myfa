@@ -2167,7 +2167,248 @@ app.get('/api/template-ratings', async (req, res) => {
     res.json({ likes, dislikes, warned: dislikes > likes });
 });
 
-module.exports = app;
+
+// ==========================================
+//  MINIAPP FILE MANAGER & UNIQUE LINKS
+// ==========================================
+
+// Helper to generate random string
+function generateRandomString(length) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < length; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+    return result;
+}
+
+// Get or create unique link for bot
+app.post('/api/miniapp/get-link', async (req, res) => {
+    const { botId, userId } = req.body;
+    if (!botId || !userId) return res.json({ success: false, error: 'Missing params' });
+
+    // Auth check
+    const adminCheck = String(userId) === String(ADMIN_ID);
+    if (!adminCheck) {
+        const userBots = await fbGet(`user_${userId}_bots`) || [];
+        if (!userBots.find(b => b.id === botId)) return res.json({ success: false, error: 'Unauthorized' });
+    }
+
+    let linkData = await fbGet(`bot_${botId}_miniapp_link`);
+    if (!linkData || !linkData.linkId) {
+        const linkId = `${botId}${generateRandomString(5)}`;
+        linkData = { linkId };
+        await fbSet(`bot_${botId}_miniapp_link`, linkData);
+        // Also map linkId to botId for quick lookup
+        await fbSet(`miniapp_links/${linkId}`, { botId });
+    }
+
+    res.json({ success: true, linkId: linkData.linkId });
+});
+
+// Manage MiniApp Files (List, Create, Update, Delete)
+app.get('/api/miniapp/files', async (req, res) => {
+    const { botId, userId } = req.query;
+    if (!botId) return res.json([]);
+    const files = await fbGet(`bot_${botId}_miniapp_files`) || {};
+    res.json(files);
+});
+
+app.post('/api/miniapp/file', async (req, res) => {
+    const { botId, userId, file } = req.body;
+    if (!botId || !userId || !file || !file.name) return res.json({ success: false });
+
+    // Auth check
+    const adminCheck = String(userId) === String(ADMIN_ID);
+    if (!adminCheck) {
+        const userBots = await fbGet(`user_${userId}_bots`) || [];
+        if (!userBots.find(b => b.id === botId)) return res.json({ success: false, error: 'Unauthorized' });
+    }
+
+    let files = await fbGet(`bot_${botId}_miniapp_files`) || {};
+    const safeName = file.name.replace(/\./g, '_'); // FB keys cant contain dots
+    file.lastUpdated = Date.now();
+    files[safeName] = file;
+    await fbSet(`bot_${botId}_miniapp_files`, files);
+    res.json({ success: true, files });
+});
+
+app.post('/api/miniapp/delete-file', async (req, res) => {
+    const { botId, userId, fileName } = req.body;
+    if (!botId || !userId || !fileName) return res.json({ success: false });
+
+    // Auth check
+    const adminCheck = String(userId) === String(ADMIN_ID);
+    if (!adminCheck) {
+        const userBots = await fbGet(`user_${userId}_bots`) || [];
+        if (!userBots.find(b => b.id === botId)) return res.json({ success: false, error: 'Unauthorized' });
+    }
+
+    let files = await fbGet(`bot_${botId}_miniapp_files`) || {};
+    const safeName = fileName.replace(/\./g, '_');
+    if (files[safeName]) {
+        delete files[safeName];
+        await fbSet(`bot_${botId}_miniapp_files`, files);
+    }
+    res.json({ success: true, files });
+});
+
+// Serve MiniApp HTML and Assets
+app.get('/miniapp/:linkId', async (req, res) => {
+    const { linkId } = req.params;
+    const linkMap = await fbGet(`miniapp_links/${linkId}`);
+    if (!linkMap || !linkMap.botId) return res.status(404).send('MiniApp not found');
+    const botId = linkMap.botId;
+
+    const files = await fbGet(`bot_${botId}_miniapp_files`) || {};
+    const indexFile = Object.values(files).find(f => f.name.toLowerCase() === 'index.html');
+
+    if (!indexFile) return res.status(404).send('index.html not found in MiniApp. Please create it in the MiniApp File Manager.');
+
+    // Inject scripts
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
+    const baseUrl = `${proto}://${host}`;
+
+    const injectedHtml = indexFile.content.replace('</head>', `
+        <script src="https://telegram.org/js/telegram-web-app.js"></script>
+        <script>
+            window.MiniAppAPI = {
+                botId: '${botId}',
+                baseUrl: '${baseUrl}',
+                getData: async function(key) {
+                    try {
+                        const initData = window.Telegram?.WebApp?.initData || '';
+                        const r = await fetch('${baseUrl}/api/miniapp/data/get', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ botId: '${botId}', initData, key })
+                        });
+                        const d = await r.json();
+                        return d.success ? d.data : null;
+                    } catch(e) { return null; }
+                },
+                setData: async function(key, value) {
+                    try {
+                        const initData = window.Telegram?.WebApp?.initData || '';
+                        const r = await fetch('${baseUrl}/api/miniapp/data/set', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ botId: '${botId}', initData, key, value })
+                        });
+                        const d = await r.json();
+                        return d.success;
+                    } catch(e) { return false; }
+                },
+                notifyBackend: async function(action, payload) {
+                     try {
+                        const initData = window.Telegram?.WebApp?.initData || '';
+                        const r = await fetch('${baseUrl}/api/miniapp/notify', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ botId: '${botId}', initData, action, payload })
+                        });
+                        const d = await r.json();
+                        return d.success;
+                    } catch(e) { return false; }
+                }
+            };
+        </script>
+    </head>`);
+
+    res.setHeader('Content-Type', 'text/html');
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    res.send(injectedHtml);
+});
+
+app.get('/miniapp/:linkId/:filename', async (req, res) => {
+    const { linkId, filename } = req.params;
+    const linkMap = await fbGet(`miniapp_links/${linkId}`);
+    if (!linkMap || !linkMap.botId) return res.status(404).send('Not found');
+    const botId = linkMap.botId;
+
+    const files = await fbGet(`bot_${botId}_miniapp_files`) || {};
+    const safeName = filename.replace(/\./g, '_');
+    const file = files[safeName];
+
+    if (!file) {
+        // Try finding by exact name
+        const exactFile = Object.values(files).find(f => f.name === filename);
+        if (!exactFile) return res.status(404).send('Not found');
+
+        let type = 'text/plain';
+        if (exactFile.type === 'css') type = 'text/css';
+        else if (exactFile.type === 'js' || exactFile.type === 'javascript') type = 'application/javascript';
+        else if (exactFile.type === 'html') type = 'text/html';
+
+        res.setHeader('Content-Type', type);
+        return res.send(exactFile.content);
+    }
+
+    let type = 'text/plain';
+    if (file.type === 'css') type = 'text/css';
+    else if (file.type === 'js' || file.type === 'javascript') type = 'application/javascript';
+    else if (file.type === 'html') type = 'text/html';
+
+    res.setHeader('Content-Type', type);
+    res.send(file.content);
+});
+
+// MiniApp Secure Data Communication Endpoints
+// We need to parse initData to get userId securely
+function extractUserIdFromInitData(initData) {
+    if (!initData) return null;
+    try {
+        const q = new URLSearchParams(initData);
+        const user = q.get('user');
+        if (user) {
+            const userData = JSON.parse(decodeURIComponent(user));
+            return userData.id;
+        }
+    } catch(e) {}
+    return null; // fallback or insecure
+}
+
+app.post('/api/miniapp/data/get', async (req, res) => {
+    const { botId, initData, key } = req.body;
+    let uId = extractUserIdFromInitData(initData);
+    if (!uId && req.body.devUserId) uId = req.body.devUserId; // fallback for testing without telegram
+    if (!botId || !uId || !key) return res.json({ success: false, error: 'Missing params' });
+
+    const dbKey = `bot_${botId}_miniapp_data_${uId}`;
+    const data = await fbGet(dbKey) || {};
+    res.json({ success: true, data: data[key] });
+});
+
+app.post('/api/miniapp/data/set', async (req, res) => {
+    const { botId, initData, key, value } = req.body;
+    let uId = extractUserIdFromInitData(initData);
+    if (!uId && req.body.devUserId) uId = req.body.devUserId; // fallback
+    if (!botId || !uId || !key) return res.json({ success: false, error: 'Missing params' });
+
+    const dbKey = `bot_${botId}_miniapp_data_${uId}`;
+    let data = await fbGet(dbKey) || {};
+    data[key] = value;
+    await fbSet(dbKey, data);
+    res.json({ success: true });
+});
+
+app.post('/api/miniapp/notify', async (req, res) => {
+    const { botId, initData, action, payload } = req.body;
+    let uId = extractUserIdFromInitData(initData);
+    if (!uId && req.body.devUserId) uId = req.body.devUserId; // fallback
+    if (!botId || !uId) return res.json({ success: false, error: 'Missing params' });
+
+    // Save the notification/action request to firestore
+    const notif = {
+        userId: uId,
+        action: action,
+        payload: payload || {},
+        status: 'pending',
+        timestamp: Date.now()
+    };
+    await fbPush(`bot_${botId}_miniapp_actions`, notif);
+
+    res.json({ success: true });
+});
 
 app.get('/api/notifications', async (req, res) => {
     const notifs = await fbGet(`user_${req.query.userId}_notifications`) || [];
@@ -2202,3 +2443,265 @@ app.get('/api/stats', async (req, res) => {
         ]
     });
 });
+
+
+// ==========================================
+//  MINIAPP FILE MANAGER & UNIQUE LINKS
+// ==========================================
+
+// Helper to generate random string
+function generateRandomString(length) {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < length; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+    return result;
+}
+
+// Get or create unique link for bot
+app.post('/api/miniapp/get-link', async (req, res) => {
+    const { botId, userId } = req.body;
+    if (!botId || !userId) return res.json({ success: false, error: 'Missing params' });
+
+    // Auth check
+    const adminCheck = String(userId) === String(ADMIN_ID);
+    if (!adminCheck) {
+        const userBots = await fbGet(`user_${userId}_bots`) || [];
+        if (!userBots.find(b => b.id === botId)) return res.json({ success: false, error: 'Unauthorized' });
+    }
+
+    let linkData = await fbGet(`bot_${botId}_miniapp_link`);
+    if (!linkData || !linkData.linkId) {
+        const linkId = `${botId}${generateRandomString(5)}`;
+        linkData = { linkId };
+        await fbSet(`bot_${botId}_miniapp_link`, linkData);
+        // Also map linkId to botId for quick lookup
+        await fbSet(`miniapp_links/${linkId}`, { botId });
+    }
+
+    res.json({ success: true, linkId: linkData.linkId });
+});
+
+// Manage MiniApp Files (List, Create, Update, Delete)
+app.get('/api/miniapp/files', async (req, res) => {
+    const { botId, userId } = req.query;
+    if (!botId) return res.json([]);
+    const files = await fbGet(`bot_${botId}_miniapp_files`) || {};
+    res.json(files);
+});
+
+app.post('/api/miniapp/file', async (req, res) => {
+    const { botId, userId, file } = req.body;
+    if (!botId || !userId || !file || !file.name) return res.json({ success: false });
+
+    // Auth check
+    const adminCheck = String(userId) === String(ADMIN_ID);
+    if (!adminCheck) {
+        const userBots = await fbGet(`user_${userId}_bots`) || [];
+        if (!userBots.find(b => b.id === botId)) return res.json({ success: false, error: 'Unauthorized' });
+    }
+
+    let files = await fbGet(`bot_${botId}_miniapp_files`) || {};
+    const safeName = file.name.replace(/\./g, '_'); // FB keys cant contain dots
+    file.lastUpdated = Date.now();
+    files[safeName] = file;
+    await fbSet(`bot_${botId}_miniapp_files`, files);
+    res.json({ success: true, files });
+});
+
+app.post('/api/miniapp/delete-file', async (req, res) => {
+    const { botId, userId, fileName } = req.body;
+    if (!botId || !userId || !fileName) return res.json({ success: false });
+
+    // Auth check
+    const adminCheck = String(userId) === String(ADMIN_ID);
+    if (!adminCheck) {
+        const userBots = await fbGet(`user_${userId}_bots`) || [];
+        if (!userBots.find(b => b.id === botId)) return res.json({ success: false, error: 'Unauthorized' });
+    }
+
+    let files = await fbGet(`bot_${botId}_miniapp_files`) || {};
+    const safeName = fileName.replace(/\./g, '_');
+    if (files[safeName]) {
+        delete files[safeName];
+        await fbSet(`bot_${botId}_miniapp_files`, files);
+    }
+    res.json({ success: true, files });
+});
+
+// Serve MiniApp HTML and Assets
+app.get('/miniapp/:linkId', async (req, res) => {
+    const { linkId } = req.params;
+    const linkMap = await fbGet(`miniapp_links/${linkId}`);
+    if (!linkMap || !linkMap.botId) return res.status(404).send('MiniApp not found');
+    const botId = linkMap.botId;
+
+    const files = await fbGet(`bot_${botId}_miniapp_files`) || {};
+    const indexFile = Object.values(files).find(f => f.name.toLowerCase() === 'index.html');
+
+    if (!indexFile) return res.status(404).send('index.html not found in MiniApp. Please create it in the MiniApp File Manager.');
+
+    // Inject scripts
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
+    const baseUrl = `${proto}://${host}`;
+
+    const injectedHtml = indexFile.content.replace('</head>', `
+        <script src="https://telegram.org/js/telegram-web-app.js"></script>
+        <script>
+            window.MiniAppAPI = {
+                botId: '${botId}',
+                baseUrl: '${baseUrl}',
+                getData: async function(key) {
+                    try {
+                        const initData = window.Telegram?.WebApp?.initData || '';
+                        const r = await fetch('${baseUrl}/api/miniapp/data/get', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ botId: '${botId}', initData, key })
+                        });
+                        const d = await r.json();
+                        return d.success ? d.data : null;
+                    } catch(e) { return null; }
+                },
+                setData: async function(key, value) {
+                    try {
+                        const initData = window.Telegram?.WebApp?.initData || '';
+                        const r = await fetch('${baseUrl}/api/miniapp/data/set', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ botId: '${botId}', initData, key, value })
+                        });
+                        const d = await r.json();
+                        return d.success;
+                    } catch(e) { return false; }
+                },
+                notifyBackend: async function(action, payload) {
+                     try {
+                        const initData = window.Telegram?.WebApp?.initData || '';
+                        const r = await fetch('${baseUrl}/api/miniapp/notify', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ botId: '${botId}', initData, action, payload })
+                        });
+                        const d = await r.json();
+                        return d.success;
+                    } catch(e) { return false; }
+                }
+            };
+        </script>
+    </head>`);
+
+    res.setHeader('Content-Type', 'text/html');
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    res.send(injectedHtml);
+});
+
+app.get('/miniapp/:linkId/:filename', async (req, res) => {
+    const { linkId, filename } = req.params;
+    const linkMap = await fbGet(`miniapp_links/${linkId}`);
+    if (!linkMap || !linkMap.botId) return res.status(404).send('Not found');
+    const botId = linkMap.botId;
+
+    const files = await fbGet(`bot_${botId}_miniapp_files`) || {};
+    const safeName = filename.replace(/\./g, '_');
+    const file = files[safeName];
+
+    if (!file) {
+        // Try finding by exact name
+        const exactFile = Object.values(files).find(f => f.name === filename);
+        if (!exactFile) return res.status(404).send('Not found');
+
+        let type = 'text/plain';
+        if (exactFile.type === 'css') type = 'text/css';
+        else if (exactFile.type === 'js' || exactFile.type === 'javascript') type = 'application/javascript';
+        else if (exactFile.type === 'html') type = 'text/html';
+
+        res.setHeader('Content-Type', type);
+        return res.send(exactFile.content);
+    }
+
+    let type = 'text/plain';
+    if (file.type === 'css') type = 'text/css';
+    else if (file.type === 'js' || file.type === 'javascript') type = 'application/javascript';
+    else if (file.type === 'html') type = 'text/html';
+
+    res.setHeader('Content-Type', type);
+    res.send(file.content);
+});
+
+// MiniApp Secure Data Communication Endpoints
+// Cryptographically verify initData
+async function extractUserIdFromInitData(initData) {
+    if (!initData) return null;
+    try {
+        const q = new URLSearchParams(initData);
+        const hash = q.get('hash');
+        q.delete('hash');
+        const keys = Array.from(q.keys());
+        keys.sort();
+        const dataCheckString = keys.map(k => `${k}=${q.get(k)}`).join('\n');
+        const secretKey = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+        const calculatedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+        if (calculatedHash !== hash) return null; // Invalid signature
+        const user = q.get('user');
+        if (user) {
+            const userData = JSON.parse(decodeURIComponent(user));
+            return userData.id;
+        }
+    } catch(e) {
+        console.error('Error verifying initData:', e);
+    }
+    return null;
+}
+
+app.post('/api/miniapp/data/get', async (req, res) => {
+    const { botId, initData, key } = req.body;
+    let uId = await extractUserIdFromInitData(initData);
+    if (!uId) return res.json({ success: false, error: 'Unauthorized or missing params' });
+
+    const dbKey = `bot_${botId}_miniapp_data_${uId}`;
+    const data = await fbGet(dbKey) || {};
+    res.json({ success: true, data: data[key] });
+});
+
+app.post('/api/miniapp/data/set', async (req, res) => {
+    const { botId, initData, key, value } = req.body;
+    let uId = await extractUserIdFromInitData(initData);
+    if (!uId) return res.json({ success: false, error: 'Unauthorized or missing params' });
+
+    const dbKey = `bot_${botId}_miniapp_data_${uId}`;
+    let data = await fbGet(dbKey) || {};
+    data[key] = value;
+    await fbSet(dbKey, data);
+    res.json({ success: true });
+});
+
+app.post('/api/miniapp/notify', async (req, res) => {
+    const { botId, initData, action, payload } = req.body;
+    let uId = await extractUserIdFromInitData(initData);
+    if (!uId) return res.json({ success: false, error: 'Unauthorized or missing params' });
+
+    // Process notification
+    const notif = {
+        userId: uId,
+        action: action,
+        payload: payload || {},
+        status: 'pending',
+        timestamp: Date.now()
+    };
+    await fbPush(`bot_${botId}_miniapp_actions`, notif);
+
+    // Provide the notification directly to the bot if possible
+    try {
+        const bot = new Telegraf(BOT_TOKEN);
+        // You could check if a channel is configured or notify the admin
+        // For simplicity, just log it as a bot action and possibly run command
+        // if there's an internal webhook, send it there or process natively
+    } catch (e) {
+        console.error(e);
+    }
+
+    res.json({ success: true });
+});
+
+module.exports = app;
