@@ -38,9 +38,9 @@ async function fbPush(path, data) {
 }
 
 // ===== CONSTANTS =====
-const BOT_TOKEN = "8561070534:AAFa_b1cRxb74_re_DOhmasXSODaWtqvdWs";
-const ADMIN_ID = 6941014837;
-const OFFICIAL_CHANNEL = -1002448299298; // mandatory join channel (@MYFA_ORG)
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const ADMIN_ID = process.env.ADMIN_ID || '6941014837';
+const OFFICIAL_CHANNEL = process.env.OFFICIAL_CHANNEL_ID || '-1002448299298'; // mandatory join channel (@MYFA_ORG)
 
 // ===== SHARED HELPERS =====
 async function registerUser(userId, fromData) {
