@@ -9,26 +9,24 @@ export default async function (query) {
 
     if (data === 'help') {
       await api.sendMessage({
-        chat_id: query.message?.chat?.id || query.from.id,
-        text: 'Use /start to register and /help to see supported commands. The Mini App frontend must be hosted over HTTPS and call Telegram.WebApp.Serverless.call for authenticated backend operations.',
+        chat_id: query.message?.chat?.id ?? query.from.id,
+        text: 'Use /start to register and /help for supported commands.',
       });
       return;
     }
 
     if (data === 'open_app_help') {
       await api.sendMessage({
-        chat_id: query.message?.chat?.id || query.from.id,
-        text: 'To connect the Mini App, host the existing UI on HTTPS, configure its URL in BotFather, then call named Serverless endpoints with Telegram.WebApp.Serverless.call. Do not use a client-supplied userId for authorization.',
+        chat_id: query.message?.chat?.id ?? query.from.id,
+        text: 'The Mini App UI must be hosted over HTTPS. The new UI should call Telegram.WebApp.Serverless.call() to reach authenticated named backend endpoints.',
       });
       return;
     }
 
     if (data === 'check_join') {
-      // Configure the official channel ID and enable channel membership checks
-      // before using this callback in production.
       await api.sendMessage({
-        chat_id: query.message?.chat?.id || query.from.id,
-        text: 'Channel membership checks must be configured for your official channel before this action can approve access.',
+        chat_id: query.message?.chat?.id ?? query.from.id,
+        text: 'Configure the official channel ID and membership check before using this action for access control.',
       });
     }
   } catch (error) {
