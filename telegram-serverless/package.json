@@ -1,0 +1,7 @@
+{
+  "name": "myfa-host-telegram-serverless",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Telegram Serverless migration starter for MyFa Host",
+  "type": "module"
+}
