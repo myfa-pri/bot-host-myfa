@@ -1,7 +1,7 @@
 import { table, integer, text, boolean, json, index, sql } from 'sdk/db';
 
 // Telegram Serverless SQLite is the canonical database for the migrated app.
-// Relationships are enforced in application code; Serverless does not support foreign keys.
+// Never store Bot API tokens or Serverless CLI credentials in this database.
 
 export const users = table('users', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -52,6 +52,20 @@ export const botCommands = table('bot_commands', {
 }, (t) => ({
   botIdx: index('idx_bot_commands_bot').on(t.telegramBotId),
   commandIdx: index('idx_bot_commands_name').on(t.command),
+}));
+
+// Stores user-created, declarative bot configuration/code as data.
+// It is intentionally NOT executed as arbitrary JavaScript/Python by Serverless.
+export const botSource = table('bot_source', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  telegramBotId: text('telegram_bot_id').notNull().unique(),
+  language: text('language').notNull().default('config'),
+  source: text('source').notNull().default(''),
+  version: integer('version').notNull().default(1),
+  updatedBy: integer('updated_by'),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+}, (t) => ({
+  botIdx: index('idx_bot_source_bot').on(t.telegramBotId),
 }));
 
 export const activityLogs = table('activity_logs', {
