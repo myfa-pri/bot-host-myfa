@@ -64,10 +64,7 @@ export default async function (message, ctx) {
   if (text === '/start') {
     await api.sendMessage({
       chat_id: chatId,
-      text:
-        'MYFA HOST\n\n' +
-        'Your Telegram-native bot platform is ready.\n\n' +
-        'Open the Mini App to manage your account, commands and bot configuration.',
+      text: 'MYFA HOST\n\nYour Telegram-native bot platform is ready.\n\nOpen the Mini App to manage your account, commands and bot configuration.',
       reply_markup: menuKeyboard(),
     });
     return;
@@ -76,15 +73,7 @@ export default async function (message, ctx) {
   if (text === '/help') {
     await api.sendMessage({
       chat_id: chatId,
-      text:
-        'MYFA HOST COMMANDS\n\n' +
-        '/start - Open MyFa Host\n' +
-        '/help - Show help\n' +
-        '/menu - Main menu\n' +
-        '/buttons - Inline buttons\n' +
-        '/keyboard - Reply keyboard\n' +
-        '/poll - Test Telegram poll\n' +
-        '/status - Serverless status',
+      text: 'MYFA HOST COMMANDS\n\n/start - Open MyFa Host\n/help - Show help\n/menu - Main menu\n/buttons - Inline buttons\n/keyboard - Reply keyboard\n/poll - Test Telegram poll\n/react - React to this message\n/status - Serverless status',
     });
     return;
   }
@@ -130,11 +119,7 @@ export default async function (message, ctx) {
   }
 
   if (text === 'Remove Keyboard') {
-    await api.sendMessage({
-      chat_id: chatId,
-      text: 'Reply keyboard removed.',
-      reply_markup: { remove_keyboard: true },
-    });
+    await api.sendMessage({ chat_id: chatId, text: 'Reply keyboard removed.', reply_markup: { remove_keyboard: true } });
     return;
   }
 
@@ -153,6 +138,16 @@ export default async function (message, ctx) {
     return;
   }
 
+  if (text === '/react') {
+    await api.setMessageReaction({
+      chat_id: chatId,
+      message_id: message.message_id,
+      reaction: [{ type: 'emoji', emoji: '👍' }],
+    });
+    await api.sendMessage({ chat_id: chatId, text: 'Reacted to your /react message.' });
+    return;
+  }
+
   if (text === '/status') {
     const count = await db.$count(messageEvents, eq(messageEvents.chatId, Number(chatId)));
     await api.sendMessage({
@@ -163,10 +158,7 @@ export default async function (message, ctx) {
   }
 
   if (text === 'Profile' || text === 'Balance' || text === 'My Bots' || text === 'Settings') {
-    const callback = text === 'Profile' ? 'profile'
-      : text === 'Balance' ? 'balance'
-      : text === 'My Bots' ? 'bots'
-      : 'settings';
+    const callback = text === 'Profile' ? 'profile' : text === 'Balance' ? 'balance' : text === 'My Bots' ? 'bots' : 'settings';
     await api.sendMessage({ chat_id: chatId, text: text + ':', reply_markup: { inline_keyboard: [[{ text: 'Open', callback_data: callback }]] } });
     return;
   }
