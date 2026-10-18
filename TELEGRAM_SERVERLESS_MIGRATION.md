@@ -1,105 +1,120 @@
 # MyFa Host → Telegram Serverless migration
 
-## What this branch is
+## Branch safety
 
-This branch is a migration track. It preserves the existing Vercel/Firebase files and documents the rewrite boundary so the main branch remains untouched.
+This branch is the isolated Telegram Serverless migration track. The existing Vercel/Firebase implementation remains untouched on `main`.
 
-The current application is a large Express/Telegraf + Firebase Realtime Database application. Telegram Serverless does **not** run Express routes, Telegraf polling/webhook servers, Node.js packages, Node filesystem APIs, or an arbitrary HTTP server. Telegram Serverless runs only JavaScript modules under `handlers/`, `lib/`, and root `schema.js`, using imports from `sdk` and `sdk/db`. The web Mini App can call named backend endpoints using `Telegram.WebApp.Serverless.call(name, input)`; the platform validates Mini App initData before the endpoint executes.
+The canonical Serverless project is now the root `tgcloud/` layout plus `tgcloud.jsonc`. The older `telegram-serverless/` folder is retained as migration notes/reference and is not the canonical deployment layout.
 
-A full port must therefore migrate API route behavior into named Mini App endpoints and update the Mini App JavaScript to call those endpoints. It is not safe to blindly copy the existing `api/index.js` or its Express routes into this project.
+## What is now migrated
 
-## Critical security action
+The branch now contains a real Telegram Serverless foundation:
 
-The previous main-branch `api/index.js` included a Bot API token as a literal. Treat that token as exposed: revoke/regenerate it with @BotFather before production use. Never add bot tokens, Serverless CLI credentials, Firebase admin credentials, or user bot tokens to Git.
+- `tgcloud/schema.js` — SQLite-backed users, bots, commands, logs, message events and settings.
+- `tgcloud/handlers/` — message, callback query, inline query, edited message, poll answer, chat member and bot membership handlers.
+- `tgcloud/lib/` — authenticated user and ownership helpers.
+- `tgcloud/endpoints/` — authenticated Mini App profile, bots, commands, statistics and compatibility operations.
+- `tgcloud.jsonc` — Telegram-hosted Mini App static files from `public/`.
+- `package.json` — Telegram Serverless CLI workflow.
+- The existing Mini App UI remains in `public/`; a compatibility bridge translates its legacy `/api/*` calls to the authenticated Serverless endpoint while the UI is progressively migrated.
 
-## Scope to port
+Telegram Serverless 0.2.0 supports Mini App hosting directly. The deployed frontend is served from an `app<app_id>.tgcloud.ai` address, while named endpoints are available under `/api/` and are callable from the Mini App with `Telegram.WebApp.Serverless.call`. See the official documentation for the current project layout and deployment model.
 
-Port backend responsibilities (not Vercel transport) from the existing app:
-- Main bot onboarding, help/status commands, mandatory-channel check, user registration, activity logs and statistics.
-- User accounts, owned bots, team membership/invites, bot settings and per-bot command definitions.
-- Templates, environment variable names/values, logs and analytics.
-- Backup/restore data, folders, deployment metadata, referrals/rewards, coupons and admin settings.
-- Main Mini App and admin Mini App UI.
+## Important security rules
 
-Important platform mismatch: Serverless is a backend runtime for Telegram bot updates and named Mini App endpoints; it does not provide generic HTML hosting or an Express-like web server. The current `public/index.html` and `public/admin.html` still need an HTTPS frontend host (e.g. static hosting) unless Telegram adds a documented HTML hosting feature. Telegram Serverless can own the backend/database while the Mini App UI is hosted separately and uses `Telegram.WebApp.Serverless.call`.
+1. Never commit Bot API tokens, Serverless CLI access tokens, Firebase credentials or user bot tokens.
+2. Serverless endpoints must use `ctx.initData.user` as the authenticated identity. Do not trust a client-supplied `userId`.
+3. Every bot read/write checks ownership server-side.
+4. Do not execute arbitrary user JavaScript with `eval`, `Function`, `child_process`, shell commands or filesystem APIs in Serverless.
+5. Keep the existing Vercel/Firebase branch as the rollback reference until data migration has been verified.
+6. If a token was ever committed to Git history, revoke/regenerate it even if the literal was later removed.
 
-Important bot-hosting mismatch: Serverless handlers run code for the **main bot**. It is not a general arbitrary-process container to keep every user-created bot running 24/7, and it does not support `eval`, `child_process`, Python/Go/Java runtimes, or arbitrary npm dependencies. Those capabilities in the current product cannot be reproduced merely by moving files into `handlers/`. They need a separate execution service / runtime or a product-scope decision to limit the platform to Telegram Serverless-compatible bots. Never execute untrusted user code inside main bot handlers.
+## Mini App architecture
 
-## Safe migration sequence
+The target architecture is:
 
-1. Revoke the token previously committed in the source.
-2. Enable Serverless for the main bot in @BotFather → Serverless and get its CLI access token.
-3. Use the project scaffold and the SDK docs to establish exact current module conventions.
-4. Create schema tables and a normalized data model, preserving ownership checks.
-5. Move each Express API capability into a named Mini App endpoint. Each endpoint obtains the caller from platform-validated Mini App context; do not accept a client-supplied `userId` as identity.
-6. Change Mini App calls from `fetch('/api/...')` to `Telegram.WebApp.Serverless.call('endpointName', input, callback)`.
-7. Use handler files for incoming updates (message, callback_query, etc.) and `sdk/api` methods for Bot API calls.
-8. Use `tgcloud run` for handler / endpoint tests, `tgcloud push` to deploy code, then inspect and run `tgcloud migrate` for schema changes.
-9. Validate user permissions on every read/write; validate owner/team membership for every bot ID; never expose stored bot tokens to client-side JS.
-10. Keep main-branch Firebase data intact until an explicit export/import and reconciliation plan has been tested.
-
-## Suggested module shape
-
-```
-handlers/
-  message.js
-  callback_query.js
-lib/
-  authz.js
-  users.js
-  bots.js
-  commands.js
-  audit.js
-  telegram.js
-  endpoints/
-    profile.js
-    dashboard.js
-    bot_list.js
-    bot_create.js
-    bot_settings.js
-    commands.js
-    templates.js
-    analytics.js
-    referrals.js
-    admin.js
-schema.js
+```text
+Telegram
+  |
+  +-- MyFa Host bot
+  |     +-- handlers/message.js
+  |     +-- handlers/callback_query.js
+  |     +-- handlers/...
+  |
+  +-- MyFa Host Mini App
+        |
+        +-- Telegram.WebApp.Serverless.call(...)
+                    |
+                    +-- tgcloud/endpoints/*
+                    +-- tgcloud/schema.js (SQLite)
 ```
 
-The exact endpoint file naming and endpoint export API must follow the current scaffolded `docs/tgcloud-sdk.md`; do not infer it from an Express or Vercel example.
+The existing HTML/CSS/JS UI is preserved instead of being rewritten from scratch. During migration, the compatibility bridge keeps legacy `fetch('/api/...')` calls working through one authenticated Serverless endpoint. New features should call named endpoints directly.
 
-## Local commands
+## Database migration
 
-Use Node.js 18+:
+Serverless has one SQLite-backed database per Serverless bot. The schema is deployed separately from data migrations:
 
 ```bash
-npm create @tgcloud/bot myfa-serverless
-cd myfa-serverless
-npx tgcloud login
-npx tgcloud status
-npx tgcloud run handlers/message '{ chat: { id: 123 }, from: { id: 123, first_name: "Test" }, text: "/start" }'
 npx tgcloud push
+npx tgcloud migrate --dry-run
 npx tgcloud migrate
 ```
 
-During migration, review `npx tgcloud diff` and `npx tgcloud migrate --dry-run` before approving changes. Push code and database migrations are intentionally separate.
+Do not delete old schema objects during the first migration. Add new columns/tables first, export/reconcile legacy Firebase data, verify it, and only then deprecate obsolete objects.
 
-## Compatibility matrix
+## User-created bot hosting: important platform boundary
 
-| Existing capability | Telegram Serverless status |
+The old MyFa Host runtime executed arbitrary user programs and long-running processes. That cannot be copied into Telegram Serverless: Serverless is a V8 sandbox for the single bot attached to the Serverless project, with no arbitrary npm runtime, filesystem, shell, Python/Go/Java process, or persistent worker.
+
+Telegram now has a separate **managed bots** feature that lets a manager bot participate in creation and management of user-owned managed bots. This is useful for the future MyFa Host flow, but it does not by itself turn one Serverless project into a general-purpose multi-bot process host. The managed-bot execution/update architecture must be validated separately before claiming that every user bot can run entirely inside this one Serverless project.
+
+Therefore this branch deliberately does **not** fake multi-bot execution. It stores bot ownership/configuration safely and removes arbitrary code execution from the Serverless path. The next production phase must choose one of:
+
+- a Telegram-native managed-bot execution architecture if the current Telegram APIs provide the complete update/runtime path required by MyFa Host, or
+- a separate execution service for user bots while MyFa Host itself remains fully Telegram-hosted.
+
+## Local workflow
+
+From the repository root:
+
+```bash
+npm install
+npx tgcloud login
+npx tgcloud status
+npx tgcloud diff
+npx tgcloud run handlers/message '{ chat: { id: 123 }, from: { id: 123, first_name: "Test" }, text: "/start" }'
+npx tgcloud run handlers/message '{ chat: { id: 123 }, from: { id: 123, first_name: "Test" }, text: "/poll" }'
+npx tgcloud push
+npx tgcloud migrate --dry-run
+npx tgcloud migrate
+npx tgcloud webhook
+npx tgcloud webhook sync
+```
+
+The CLI access token is the `app<id>:<secret>` token from BotFather → Serverless → CLI Access. It is different from the normal Bot API token and must never be committed.
+
+## Compatibility status
+
+| Capability | Status in this branch |
 |---|---|
-| Main bot messages/callbacks | Supported through update handlers and SDK Bot API |
-| Persistent users and settings | Supported via SQLite-backed Serverless DB; model/schema must be ported |
-| Mini App authenticated backend | Supported via named endpoints and validated initData |
-| Existing Express `/api/*` endpoints | Must be rewritten as named endpoints |
-| Existing Mini App static HTML hosting | Not provided by the serverless backend itself; host UI separately |
-| Telegraf / Express / axios / JSZip / npm packages in runtime | Not supported as runtime imports |
-| Firebase Realtime Database calls | Must migrate into Serverless DB or explicitly retained external API calls |
-| Run user-supplied JavaScript via `eval` | Unsafe; not supported/should be removed |
-| Run Python/Go/Java/Shell as persistent deployments | Not provided by Serverless runtime |
-| Main bot checks official-channel membership | Supported using Bot API `getChatMember`, assuming bot has the required channel access |
-| Admin panel and access control | Supported only after moving API operations to named endpoints with server-side authorization |
+| Main bot message handler | Migrated |
+| Inline buttons / callback queries | Migrated |
+| Reply keyboard | Migrated |
+| Native polls / poll answers | Migrated |
+| Membership update handlers | Migrated foundation |
+| Telegram-hosted Mini App static files | Configured |
+| Authenticated Mini App endpoints | Migrated foundation |
+| SQLite Serverless database | Schema migrated foundation |
+| Legacy `/api/*` frontend compatibility | Bridge added for core routes |
+| Existing full Vercel API parity | Not yet complete; routes must be ported and tested individually |
+| Firebase → SQLite data transfer | Not performed automatically; requires controlled export/import and reconciliation |
+| Arbitrary user code execution | Intentionally removed for safety/platform compatibility |
+| Full multi-bot runtime | Not claimed until Telegram managed-bot/update execution path is proven |
+| Vercel main branch | Preserved as rollback/reference |
 
 ## Official documentation
 
 - https://core.telegram.org/bots/serverless
 - https://core.telegram.org/bots/webapps
+- https://core.telegram.org/api/bots/managed-bots
